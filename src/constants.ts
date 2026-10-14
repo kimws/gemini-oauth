@@ -38,6 +38,10 @@ export const CODE_ASSIST_ENDPOINT = "https://daily-cloudcode-pa.googleapis.com";
 export const CODE_ASSIST_API_VERSION = "v1internal";
 export const CODE_ASSIST_BASE = `${CODE_ASSIST_ENDPOINT}/${CODE_ASSIST_API_VERSION}`;
 
+/** Production Cloud Code Assist API endpoint for corporate/enterprise subscriptions. */
+export const CODE_ASSIST_PROD_ENDPOINT = "https://cloudcode-pa.googleapis.com";
+export const CODE_ASSIST_PROD_BASE = `${CODE_ASSIST_PROD_ENDPOINT}/${CODE_ASSIST_API_VERSION}`;
+
 /**
  * Client metadata for Code Assist.
  * Free / individual (Antigravity) tier requires ideType=ANTIGRAVITY —
@@ -53,8 +57,16 @@ export function platformId(): string {
   return process.arch === "arm64" ? "LINUX_ARM64" : "LINUX_AMD64";
 }
 
+export type IdeType =
+  | "ANTIGRAVITY"
+  | "GEMINI_CLI"
+  | "VSCODE"
+  | "INTELLIJ"
+  | "IDE_UNSPECIFIED"
+  | string;
+
 export function clientMetadata(
-  ideType: "ANTIGRAVITY" | "IDE_UNSPECIFIED" = "ANTIGRAVITY",
+  ideType: IdeType = "ANTIGRAVITY",
 ): string {
   return `ideType=${ideType},platform=${platformId()},pluginType=GEMINI`;
 }
@@ -67,7 +79,7 @@ export const CODE_ASSIST_HEADERS = {
 } as const;
 
 export function coreClientMetadata(
-  ideType: "ANTIGRAVITY" | "IDE_UNSPECIFIED" = "ANTIGRAVITY",
+  ideType: IdeType = "ANTIGRAVITY",
 ): {
   ideType: string;
   platform: string;
@@ -114,6 +126,9 @@ export const REFRESH_SKEW_MS = 2 * 60 * 1000;
 
 /** Prefer installed Gemini CLI version for User-Agent. */
 export function resolveClientVersion(): string {
+  if (process.env.GEMINI_CLI_VERSION?.trim()) {
+    return process.env.GEMINI_CLI_VERSION.trim();
+  }
   try {
     const pkgPath = join(
       // node_modules/@google/gemini-cli/package.json when globally installed
@@ -135,7 +150,7 @@ export function resolveClientVersion(): string {
   } catch {
     // ignore
   }
-  return "0.49.0";
+  return "0.63.0";
 }
 
 /** Gemini CLI-compatible User-Agent used for OAuth token operations. */
@@ -151,13 +166,32 @@ export function antigravityUserAgent(): string {
   return `antigravity/language-server/${resolveClientVersion()} ${process.platform}/${process.arch}`;
 }
 
-export function methodUrl(method: string, streaming = false): string {
-  const base =
-    process.env.CODE_ASSIST_ENDPOINT && process.env.CODE_ASSIST_API_VERSION
-      ? `${process.env.CODE_ASSIST_ENDPOINT.replace(/\/$/, "")}/${process.env.CODE_ASSIST_API_VERSION}`
-      : process.env.CODE_ASSIST_ENDPOINT
-        ? `${process.env.CODE_ASSIST_ENDPOINT.replace(/\/$/, "")}/${CODE_ASSIST_API_VERSION}`
-        : CODE_ASSIST_BASE;
+export function normalizeBaseUrl(input?: string): string {
+  const envUrl =
+    process.env.CODE_ASSIST_URL || process.env.CODE_ASSIST_ENDPOINT;
+  const raw = (input?.trim() || envUrl?.trim() || CODE_ASSIST_BASE).replace(
+    /\/+$/,
+    "",
+  );
+  const defaultApiVersion =
+    process.env.CODE_ASSIST_API_VERSION || CODE_ASSIST_API_VERSION;
+  try {
+    const parsed = new URL(raw);
+    if (!parsed.pathname || parsed.pathname === "/") {
+      return `${parsed.origin}/${defaultApiVersion}`;
+    }
+    return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+  } catch {
+    return raw;
+  }
+}
+
+export function methodUrl(
+  method: string,
+  streaming = false,
+  baseUrl?: string,
+): string {
+  const base = normalizeBaseUrl(baseUrl);
   if (streaming) {
     return `${base}:${method}?alt=sse`;
   }

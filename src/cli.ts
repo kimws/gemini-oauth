@@ -5,12 +5,19 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { GeminiAuthStore } from "./auth.js";
 import {
+  CODE_ASSIST_BASE,
   DEFAULT_AUTH_FILE,
   DEFAULT_HOST,
   DEFAULT_PORT,
   PACKAGE_NAME,
   PACKAGE_VERSION,
+  normalizeBaseUrl,
+  type IdeType,
 } from "./constants.js";
+import {
+  parseLogLevel,
+  type LogLevel,
+} from "./logger.js";
 import {
   DAEMON_LOG_FILE,
   getRunningDaemon,
@@ -29,7 +36,7 @@ OpenAI-compatible API — the Gemini analogue of openai-oauth / grok-oauth.
 Usage:
   gemini-oauth [serve|start] [options]   Start local OpenAI-compatible proxy
   gemini-oauth stop                      Stop detached background server
-  gemini-oauth status                    Auth + server process status
+  gemini-oauth status [options]          Auth + server process status
   gemini-oauth logs [--follow]           Show detached server log
   gemini-oauth login [options]           Sign in via browser (or device/headless)
   gemini-oauth logout                    Clear stored credentials
@@ -41,6 +48,11 @@ Serve options:
   --auth-file <path>     Path to oauth_creds.json (default: ${DEFAULT_AUTH_FILE})
   --models <ids>         Comma-separated model allowlist
   --project <id>         Override GCP / Code Assist project id
+  --url <url>            Upstream Code Assist endpoint URL (default: ${CODE_ASSIST_BASE})
+  --ide-type <type>      Client metadata IDE type (default: ANTIGRAVITY, e.g. GEMINI_CLI, VSCODE)
+  --user-project <id>    GCP quota project (x-goog-user-project, defaults to --project)
+  --user-agent <ua>      Custom User-Agent header override
+  --logging-level <lvl>  Logging level: debug, info, warn, error, silent (default: info)
   --detach, -d           Run in background (daemon)
   --foreground           Force foreground (used by daemon child)
   --force                Ignore daemon guard for a foreground second instance
@@ -86,10 +98,23 @@ const fail = (msg: string, code = 1): never => {
 
 const cliEntry = fileURLToPath(import.meta.url);
 
-async function cmdAuthStatus(authFile: string, project?: string): Promise<void> {
+async function cmdAuthStatus(
+  authFile: string,
+  project?: string,
+  url?: string,
+  logLevel?: LogLevel,
+  ideType?: IdeType,
+  userProject?: string,
+  userAgent?: string,
+): Promise<void> {
   const store = new GeminiAuthStore({
     authFilePath: authFile,
     projectId: project,
+    url,
+    logLevel,
+    ideType,
+    userProject,
+    userAgent,
   });
   if (!store.hasCredentials()) {
     print(`Auth: not signed in (${authFile})`);
@@ -103,6 +128,11 @@ async function cmdAuthStatus(authFile: string, project?: string): Promise<void> 
         print(`  expires_at: ${session.expiresAt.toISOString()}`);
       print(`  auth_file:  ${authFile}`);
       print(`  token:      available`);
+      print(`  upstream:   ${url ?? CODE_ASSIST_BASE}`);
+      if (ideType && ideType !== "ANTIGRAVITY")
+        print(`  ide_type:   ${ideType}`);
+      if (userProject)
+        print(`  user_project: ${userProject}`);
       try {
         const projectId = await store.ensureProjectId();
         print(`  project:    ${projectId}`);
@@ -121,6 +151,9 @@ async function cmdAuthStatus(authFile: string, project?: string): Promise<void> 
     print(`Server: running`);
     print(`  pid:        ${daemon.pid}`);
     print(`  url:        ${daemon.url}`);
+    if (daemon.upstreamUrl) print(`  upstream:   ${daemon.upstreamUrl}`);
+    if (daemon.ideType)     print(`  ide_type:   ${daemon.ideType}`);
+    if (daemon.logLevel)    print(`  log_level:  ${daemon.logLevel}`);
     print(`  started_at: ${daemon.startedAt}`);
     print(`  log_file:   ${daemon.logFile}`);
   } else {
@@ -135,10 +168,20 @@ async function cmdLogin(opts: {
   device: boolean;
   timeoutMs?: number;
   project?: string;
+  url?: string;
+  logLevel?: LogLevel;
+  ideType?: IdeType;
+  userProject?: string;
+  userAgent?: string;
 }): Promise<void> {
   const store = new GeminiAuthStore({
     authFilePath: opts.authFile,
     projectId: opts.project,
+    url: opts.url,
+    logLevel: opts.logLevel,
+    ideType: opts.ideType,
+    userProject: opts.userProject,
+    userAgent: opts.userAgent,
   });
   await login({
     store,
@@ -155,11 +198,17 @@ function printExistingServer(existing: {
   port: number;
   logFile: string;
   startedAt: string;
+  upstreamUrl?: string;
+  logLevel?: string;
+  ideType?: string;
 }): void {
   print(`Server already running (detached daemon)`);
   print(`  pid:        ${existing.pid}`);
   print(`  url:        ${existing.url}`);
   print(`  port:       ${existing.port}`);
+  if (existing.upstreamUrl) print(`  upstream:   ${existing.upstreamUrl}`);
+  if (existing.ideType)     print(`  ide_type:   ${existing.ideType}`);
+  if (existing.logLevel)    print(`  log_level:  ${existing.logLevel}`);
   print(`  started_at: ${existing.startedAt}`);
   print(`  log_file:   ${existing.logFile}`);
   print(``);
@@ -202,6 +251,11 @@ async function cmdServe(opts: {
   authFile: string;
   models?: string[];
   project?: string;
+  url?: string;
+  logLevel: LogLevel;
+  ideType?: IdeType;
+  userProject?: string;
+  userAgent?: string;
   detach: boolean;
   foreground: boolean;
   force: boolean;
@@ -253,6 +307,11 @@ async function cmdServe(opts: {
     const store = new GeminiAuthStore({
       authFilePath: opts.authFile,
       projectId: opts.project,
+      url: opts.url,
+      logLevel: opts.logLevel,
+      ideType: opts.ideType,
+      userProject: opts.userProject,
+      userAgent: opts.userAgent,
     });
     if (!store.hasCredentials()) {
       print(`No credentials found. Run login first:\n  gemini-oauth login\n`);
@@ -266,6 +325,11 @@ async function cmdServe(opts: {
       host: opts.host,
       port: opts.port,
       authFile: opts.authFile,
+      upstreamUrl: opts.url,
+      logLevel: opts.logLevel,
+      ideType: opts.ideType,
+      userProject: opts.userProject,
+      userAgent: opts.userAgent,
     });
 
     const ready = await waitForDaemonReady(state);
@@ -283,6 +347,9 @@ async function cmdServe(opts: {
     print(`  pid: ${state.pid}`);
     print(`  url: ${state.url}`);
     print(`  port: ${state.port}`);
+    if (state.upstreamUrl) print(`  upstream: ${state.upstreamUrl}`);
+    if (state.ideType)     print(`  ide_type: ${state.ideType}`);
+    if (state.logLevel)    print(`  log_level: ${state.logLevel}`);
     print(`  log: ${state.logFile}`);
     print(``);
     print(`  gemini-oauth status`);
@@ -307,6 +374,11 @@ async function cmdServe(opts: {
   const store = new GeminiAuthStore({
     authFilePath: opts.authFile,
     projectId: opts.project,
+    url: opts.url,
+    logLevel: opts.logLevel,
+    ideType: opts.ideType,
+    userProject: opts.userProject,
+    userAgent: opts.userAgent,
   });
   if (!store.hasCredentials()) {
     if (process.env.GEMINI_OAUTH_DAEMON === "1") {
@@ -325,6 +397,11 @@ async function cmdServe(opts: {
       port: opts.port,
       auth: store,
       models: opts.models,
+      url: opts.url,
+      ideType: opts.ideType,
+      userProject: opts.userProject,
+      userAgent: opts.userAgent,
+      logLevel: opts.logLevel,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -337,30 +414,40 @@ async function cmdServe(opts: {
     throw err;
   }
 
-  print("");
-  print(`Gemini OAuth proxy ready at ${running.url}`);
-  print(`  host: ${running.host}`);
-  print(`  port: ${running.port}`);
-  if (!opts.portExplicit && running.port === DEFAULT_PORT) {
-    print(
-      `  (default port ${DEFAULT_PORT}; override with --port or GEMINI_OAUTH_PORT)`,
-    );
-  }
-  print(`Use this as your OpenAI base URL. No API key is required.`);
-  print(
-    `Available models: ${running.models.length ? running.models.join(", ") : "(none)"}`,
-  );
-  print("");
-  print(`Examples:`);
-  print(`  curl ${running.url}/models`);
-  print(
-    `  curl ${running.url}/chat/completions -H 'Content-Type: application/json' -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}'`,
-  );
-  if (process.env.GEMINI_OAUTH_DAEMON === "1") {
-    print(`(detached daemon mode — stop with: gemini-oauth stop)`);
-  } else {
+  if (opts.logLevel !== "silent") {
     print("");
-    print(`Press Ctrl+C to stop.`);
+    print(`Gemini OAuth proxy ready at ${running.url}`);
+    print(`  host:      ${running.host}`);
+    print(`  port:      ${running.port}`);
+    print(`  upstream:  ${running.upstreamUrl}`);
+    if (opts.ideType && opts.ideType !== "ANTIGRAVITY") {
+      print(`  ide_type:  ${opts.ideType}`);
+    }
+    if (opts.userProject) {
+      print(`  user_project: ${opts.userProject}`);
+    }
+    print(`  log_level: ${opts.logLevel}`);
+    if (!opts.portExplicit && running.port === DEFAULT_PORT) {
+      print(
+        `  (default port ${DEFAULT_PORT}; override with --port or GEMINI_OAUTH_PORT)`,
+      );
+    }
+    print(`Use this as your OpenAI base URL. No API key is required.`);
+    print(
+      `Available models: ${running.models.length ? running.models.join(", ") : "(none)"}`,
+    );
+    print("");
+    print(`Examples:`);
+    print(`  curl ${running.url}/models`);
+    print(
+      `  curl ${running.url}/chat/completions -H 'Content-Type: application/json' -d '{"model":"gemini-2.5-flash","messages":[{"role":"user","content":"hi"}]}'`,
+    );
+    if (process.env.GEMINI_OAUTH_DAEMON === "1") {
+      print(`(detached daemon mode — stop with: gemini-oauth stop)`);
+    } else {
+      print("");
+      print(`Press Ctrl+C to stop.`);
+    }
   }
 
   const shutdown = async () => {
@@ -411,6 +498,13 @@ async function main(): Promise<void> {
       "auth-file": { type: "string" },
       models: { type: "string" },
       project: { type: "string" },
+      url: { type: "string" },
+      endpoint: { type: "string" },
+      "ide-type": { type: "string" },
+      "user-project": { type: "string" },
+      "user-agent": { type: "string" },
+      "logging-level": { type: "string" },
+      "log-level": { type: "string" },
       open: { type: "boolean", default: true },
       "no-open": { type: "boolean", default: false },
       device: { type: "boolean", default: false },
@@ -442,6 +536,64 @@ async function main(): Promise<void> {
   const open = values["no-open"] ? false : values.open !== false;
   const project = values.project;
 
+  const rawUrl =
+    values.url ??
+    values.endpoint ??
+    process.env.CODE_ASSIST_URL ??
+    process.env.CODE_ASSIST_ENDPOINT;
+  if (values.url !== undefined || values.endpoint !== undefined) {
+    const inputUrl = (values.url ?? values.endpoint)!;
+    try {
+      const parsed = new URL(inputUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        fail(`Invalid --url: ${inputUrl} (must be http:// or https://)`);
+      }
+    } catch {
+      fail(`Invalid --url: ${inputUrl}`);
+    }
+  }
+  const url = rawUrl ? normalizeBaseUrl(rawUrl) : undefined;
+
+  const rawLogLevel =
+    values["logging-level"] ??
+    values["log-level"] ??
+    process.env.GEMINI_OAUTH_LOG_LEVEL ??
+    process.env.LOG_LEVEL;
+  let logLevel: LogLevel = "info";
+  if (
+    values["logging-level"] !== undefined ||
+    values["log-level"] !== undefined ||
+    rawLogLevel !== undefined
+  ) {
+    if (rawLogLevel) {
+      const parsedLevel = parseLogLevel(rawLogLevel);
+      if (!parsedLevel) {
+        fail(
+          `Invalid --logging-level: ${rawLogLevel}. Allowed: debug, info, warn, error, silent`,
+        );
+      } else {
+        logLevel = parsedLevel;
+      }
+    }
+  }
+
+  const rawIdeType =
+    values["ide-type"] ??
+    process.env.GEMINI_OAUTH_IDE_TYPE ??
+    process.env.CODE_ASSIST_IDE_TYPE;
+  const ideType = (rawIdeType?.trim() as IdeType) || undefined;
+
+  const rawUserProject =
+    values["user-project"] ??
+    process.env.GEMINI_OAUTH_USER_PROJECT;
+  const userProject = rawUserProject?.trim() || undefined;
+
+  const rawUserAgent =
+    values["user-agent"] ??
+    process.env.GEMINI_OAUTH_USER_AGENT ??
+    process.env.CODE_ASSIST_USER_AGENT;
+  const customUserAgent = rawUserAgent?.trim() || undefined;
+
   if (command === "help") {
     print(help);
     return;
@@ -463,6 +615,11 @@ async function main(): Promise<void> {
       device: Boolean(values.device),
       timeoutMs,
       project,
+      url,
+      logLevel,
+      ideType,
+      userProject,
+      userAgent: customUserAgent,
     });
     return;
   }
@@ -478,7 +635,15 @@ async function main(): Promise<void> {
   }
 
   if (command === "status") {
-    await cmdAuthStatus(authFile, project);
+    await cmdAuthStatus(
+      authFile,
+      project,
+      url,
+      logLevel,
+      ideType,
+      userProject,
+      customUserAgent,
+    );
     return;
   }
 
@@ -514,6 +679,18 @@ async function main(): Promise<void> {
     if (values.models) rawServeArgs.push("--models", values.models);
     if (values.project) rawServeArgs.push("--project", values.project);
     if (values["allow-remote"]) rawServeArgs.push("--allow-remote");
+    if (values.url) rawServeArgs.push("--url", values.url);
+    else if (values.endpoint) rawServeArgs.push("--url", values.endpoint);
+    if (values["ide-type"])
+      rawServeArgs.push("--ide-type", values["ide-type"]);
+    if (values["user-project"])
+      rawServeArgs.push("--user-project", values["user-project"]);
+    if (values["user-agent"])
+      rawServeArgs.push("--user-agent", values["user-agent"]);
+    if (values["logging-level"])
+      rawServeArgs.push("--logging-level", values["logging-level"]);
+    else if (values["log-level"])
+      rawServeArgs.push("--logging-level", values["log-level"]);
 
     await cmdServe({
       host,
@@ -526,6 +703,11 @@ async function main(): Promise<void> {
             .filter(Boolean)
         : undefined,
       project,
+      url,
+      logLevel,
+      ideType,
+      userProject,
+      userAgent: customUserAgent,
       detach: Boolean(values.detach),
       foreground: Boolean(values.foreground),
       force: Boolean(values.force),

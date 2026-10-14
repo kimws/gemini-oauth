@@ -24,6 +24,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/postbuild.mjs",
+    "prepare": "npm run build",
     "clean": "node scripts/clean.mjs",
     "start": "node dist/cli.js",
     "dev": "npm run build && node dist/cli.js",

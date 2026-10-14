@@ -5,9 +5,13 @@ import {
   ONBOARD_POLL_ATTEMPTS,
   ONBOARD_POLL_DELAY_MS,
   antigravityUserAgent,
+  userAgent,
+  clientMetadata,
   coreClientMetadata,
   methodUrl,
+  type IdeType,
 } from "./constants.js";
+import type { Logger } from "./logger.js";
 
 export type LoadCodeAssistPayload = {
   cloudaicompanionProject?: string | { id?: string; name?: string };
@@ -40,6 +44,13 @@ export type ProjectResolveResult =
 export type ResolveProjectOptions = {
   fetch?: typeof fetch;
   projectHint?: string;
+  baseUrl?: string;
+  url?: string;
+  endpoint?: string;
+  ideType?: IdeType;
+  userProject?: string;
+  userAgent?: string;
+  logger?: Logger;
 };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,21 +81,31 @@ export async function loadCodeAssist(
 ): Promise<LoadCodeAssistPayload | null> {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const projectHint = options.projectHint;
+  const baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
+  const ideType = options.ideType ?? "ANTIGRAVITY";
+  const userAgentStr =
+    options.userAgent ??
+    (ideType === "ANTIGRAVITY" ? antigravityUserAgent() : userAgent());
   const metadata = {
-    ...coreClientMetadata("ANTIGRAVITY"),
+    ...coreClientMetadata(ideType),
     duetProject: projectHint,
   };
   try {
-    const response = await fetchImpl(methodUrl("loadCodeAssist"), {
+    const targetUrl = methodUrl("loadCodeAssist", false, baseUrl);
+    options.logger?.debug(`loadCodeAssist requesting ${targetUrl}`);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": userAgentStr,
+      ...CODE_ASSIST_HEADERS,
+      "Client-Metadata": clientMetadata(ideType),
+    };
+    if (options.userProject) {
+      headers["x-goog-user-project"] = options.userProject;
+    }
+    const response = await fetchImpl(targetUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-        // Antigravity UA required for free-tier; GeminiCLI UA → UNSUPPORTED_CLIENT.
-        "User-Agent": antigravityUserAgent(),
-        ...CODE_ASSIST_HEADERS,
-        "Client-Metadata": `ideType=ANTIGRAVITY,platform=${metadata.platform},pluginType=GEMINI`,
-      },
+      headers,
       body: JSON.stringify({
         cloudaicompanionProject: projectHint,
         metadata,
@@ -113,20 +134,31 @@ export async function onboardUser(
 ): Promise<string | undefined> {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const projectHint = options.projectHint;
+  const baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
+  const ideType = options.ideType ?? "ANTIGRAVITY";
+  const userAgentStr =
+    options.userAgent ??
+    (ideType === "ANTIGRAVITY" ? antigravityUserAgent() : userAgent());
   try {
     const metadata = {
-      ...coreClientMetadata("ANTIGRAVITY"),
+      ...coreClientMetadata(ideType),
       duetProject: projectHint,
     };
-    const response = await fetchImpl(methodUrl("onboardUser"), {
+    const targetUrl = methodUrl("onboardUser", false, baseUrl);
+    options.logger?.debug(`onboardUser requesting ${targetUrl}`);
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+      "User-Agent": userAgentStr,
+      ...CODE_ASSIST_HEADERS,
+      "Client-Metadata": clientMetadata(ideType),
+    };
+    if (options.userProject) {
+      headers["x-goog-user-project"] = options.userProject;
+    }
+    const response = await fetchImpl(targetUrl, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-        "User-Agent": antigravityUserAgent(),
-        ...CODE_ASSIST_HEADERS,
-        "Client-Metadata": `ideType=ANTIGRAVITY,platform=${metadata.platform},pluginType=GEMINI`,
-      },
+      headers,
       body: JSON.stringify({
         tierId,
         cloudaicompanionProject: projectHint,
@@ -140,19 +172,23 @@ export async function onboardUser(
 
     let payload = (await response.json()) as OnboardUserPayload;
 
-    const base = methodUrl("loadCodeAssist").replace(/:loadCodeAssist$/, "");
+    const base = targetUrl.replace(/:onboardUser$/, "");
 
     for (let attempt = 0; attempt < ONBOARD_POLL_ATTEMPTS; attempt += 1) {
       if (payload.done) break;
       if (!payload.name) break;
       await wait(ONBOARD_POLL_DELAY_MS);
       // LRO operations live at /v1internal/{operationName}
+      const pollHeaders: Record<string, string> = {
+        Authorization: `Bearer ${accessToken}`,
+        "User-Agent": userAgentStr,
+        ...CODE_ASSIST_HEADERS,
+      };
+      if (options.userProject) {
+        pollHeaders["x-goog-user-project"] = options.userProject;
+      }
       const opResponse = await fetchImpl(`${base}/${payload.name}`, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "User-Agent": antigravityUserAgent(),
-          ...CODE_ASSIST_HEADERS,
-        },
+        headers: pollHeaders,
         redirect: "error",
       });
       if (!opResponse.ok) return undefined;

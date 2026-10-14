@@ -5,8 +5,16 @@ import {
   clientMetadata,
   methodUrl,
   antigravityUserAgent,
+  userAgent,
+  normalizeBaseUrl,
+  type IdeType,
 } from "./constants.js";
 import type { GeminiAuthStore } from "./auth.js";
+import {
+  createLogger,
+  type Logger,
+  type LogLevel,
+} from "./logger.js";
 import {
   buildCodeAssistBody,
   chatCompletionToResponses,
@@ -24,19 +32,45 @@ export type UpstreamOptions = {
   auth: GeminiAuthStore;
   models?: string[];
   fetch?: typeof fetch;
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
+  ideType?: IdeType;
+  userProject?: string;
+  userAgent?: string;
+  logLevel?: LogLevel;
+  logger?: Logger;
 };
 
 export class GeminiUpstream {
   private readonly auth: GeminiAuthStore;
   private readonly fetchImpl: typeof fetch;
+  private readonly baseUrl: string;
+  private readonly logger: Logger;
+  private readonly ideType: IdeType;
+  private readonly userProject?: string;
+  private readonly customUserAgent?: string;
   private models: string[];
 
   constructor(options: UpstreamOptions) {
     this.auth = options.auth;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.baseUrl = normalizeBaseUrl(
+      options.baseUrl ?? options.url ?? options.endpoint,
+    );
+    this.logger =
+      options.logger ??
+      createLogger({ level: options.logLevel, prefix: "upstream" });
+    this.ideType = options.ideType ?? "ANTIGRAVITY";
+    this.userProject = options.userProject;
+    this.customUserAgent = options.userAgent;
     this.models = options.models?.length
       ? options.models
       : [...DEFAULT_MODELS];
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   listModelsCached(): string[] {
@@ -51,16 +85,25 @@ export class GeminiUpstream {
   private async authHeaders(
     model: string,
     streaming: boolean,
+    projectId?: string,
   ): Promise<Record<string, string>> {
     const token = await this.auth.getAccessToken();
+    const effectiveUa =
+      this.customUserAgent ??
+      (this.ideType === "ANTIGRAVITY"
+        ? antigravityUserAgent()
+        : userAgent(model));
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
       Authorization: `Bearer ${token}`,
-      "User-Agent": antigravityUserAgent(),
+      "User-Agent": effectiveUa,
       "x-activity-request-id": randomUUID(),
       "X-Goog-Api-Client": CODE_ASSIST_HEADERS["X-Goog-Api-Client"],
-      "Client-Metadata": clientMetadata("ANTIGRAVITY"),
+      "Client-Metadata": clientMetadata(this.ideType),
     };
+    if (this.userProject) {
+      headers["x-goog-user-project"] = this.userProject;
+    }
     if (streaming) {
       headers.Accept = "text/event-stream";
     } else {
@@ -76,6 +119,7 @@ export class GeminiUpstream {
   ): Promise<Response> {
     const run = async (forceRefresh = false): Promise<Response> => {
       if (forceRefresh) {
+        this.logger.debug("Forcing token refresh for 401 retry");
         await this.auth.getAccessToken({ forceRefresh: true });
         headers.Authorization = `Bearer ${await this.auth.getAccessToken()}`;
       }
@@ -110,12 +154,16 @@ export class GeminiUpstream {
     const url = methodUrl(
       streaming ? "streamGenerateContent" : "generateContent",
       streaming,
+      this.baseUrl,
+    );
+    this.logger.debug(
+      `Upstream request POST ${url} (model: ${model}, stream: ${streaming})`,
     );
     const envelope = buildCodeAssistBody(
       { ...openAiRequest, model },
       projectId,
     );
-    const headers = await this.authHeaders(model, streaming);
+    const headers = await this.authHeaders(model, streaming, projectId);
     const response = await this.doFetch(
       url,
       headers,
@@ -124,6 +172,9 @@ export class GeminiUpstream {
 
     if (!response.ok) {
       const errText = await response.text().catch(() => "");
+      this.logger.error(
+        `Upstream error (${response.status}) from ${url}: ${errText.slice(0, 400)}`,
+      );
       return {
         kind: "error",
         status: response.status,

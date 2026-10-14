@@ -41,7 +41,7 @@ The proxy is local and stateless: the client must send the conversation history 
 - Request validation and a default 10 MiB JSON request-body limit.
 - TypeScript library exports for embedding the auth store, upstream client, and HTTP server.
 
-The current upstream is the Code Assist private API at https://daily-cloudcode-pa.googleapis.com/v1internal. It is not the public Gemini API and it has no stability guarantee from this project.
+The default upstream is the Code Assist private API at https://daily-cloudcode-pa.googleapis.com/v1internal. Enterprise and corporate Code Assist subscriptions are provisioned on the production endpoint (https://cloudcode-pa.googleapis.com/v1internal), which can be selected via `--url` or the `CODE_ASSIST_URL` environment variable. It is not the public Gemini API and it has no stability guarantee from this project.
 
 ## Requirements
 
@@ -160,6 +160,11 @@ The default base URL is http://127.0.0.1:10551/v1. A custom port changes the bas
 | --auth-file <path> | ~/.gemini/oauth_creds.json | Gemini CLI-compatible OAuth credential file. |
 | --project <id> | automatic | Override the Code Assist / GCP project ID. |
 | --models <ids> | built-in allowlist | Comma-separated model IDs returned by /v1/models. |
+| --url <url> | https://daily-cloudcode-pa.googleapis.com/v1internal | Upstream Code Assist endpoint URL (e.g. production https://cloudcode-pa.googleapis.com/v1internal). |
+| --ide-type <type> | ANTIGRAVITY | Client metadata IDE type (e.g. GEMINI_CLI, VSCODE, ANTIGRAVITY). Env: GEMINI_OAUTH_IDE_TYPE. |
+| --user-project <id> | automatic | GCP quota project sent via x-goog-user-project (defaults to --project). Env: GEMINI_OAUTH_USER_PROJECT. |
+| --user-agent <ua> | automatic | Custom User-Agent header override. Env: GEMINI_OAUTH_USER_AGENT. |
+| --logging-level <lvl> | info | Logging level: debug, info, warn, error, silent. |
 | --detach, -d | off | Start a background daemon. |
 | --device | off | Use the headless login flow. |
 | --no-open | off | Do not open a browser during login. |
@@ -186,6 +191,30 @@ gemini-oauth --project my-gcp-project --detach
 ```
 
 The project must be valid for the signed-in account and relevant Google service policies.
+
+### Enterprise / Corporate Code Assist
+
+Enterprise and corporate Code Assist subscriptions (tied to a Google Cloud project with assigned user licenses) require using the production endpoint and the official Gemini CLI client identity:
+
+```bash
+gemini-oauth \
+  --url https://cloudcode-pa.googleapis.com/v1internal \
+  --project your-gcp-project-id \
+  --ide-type GEMINI_CLI \
+  --detach
+```
+
+Or configure environment variables for persistence:
+
+```bash
+export CODE_ASSIST_URL=https://cloudcode-pa.googleapis.com/v1internal
+export GOOGLE_CLOUD_PROJECT=your-gcp-project-id
+export GEMINI_OAUTH_IDE_TYPE=GEMINI_CLI
+
+gemini-oauth --detach
+```
+
+Ensure your Google account has the `roles/cloudaicompanion.user` IAM role and an active Gemini Code Assist license in the specified project.
 
 ## API compatibility
 
