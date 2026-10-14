@@ -5,6 +5,7 @@ import {
   clientMetadata,
   methodUrl,
   antigravityUserAgent,
+  normalizeBaseUrl,
 } from "./constants.js";
 import type { GeminiAuthStore } from "./auth.js";
 import {
@@ -24,19 +25,30 @@ export type UpstreamOptions = {
   auth: GeminiAuthStore;
   models?: string[];
   fetch?: typeof fetch;
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
 };
 
 export class GeminiUpstream {
   private readonly auth: GeminiAuthStore;
   private readonly fetchImpl: typeof fetch;
+  private readonly baseUrl: string;
   private models: string[];
 
   constructor(options: UpstreamOptions) {
     this.auth = options.auth;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
+    this.baseUrl = normalizeBaseUrl(
+      options.baseUrl ?? options.url ?? options.endpoint,
+    );
     this.models = options.models?.length
       ? options.models
       : [...DEFAULT_MODELS];
+  }
+
+  getBaseUrl(): string {
+    return this.baseUrl;
   }
 
   listModelsCached(): string[] {
@@ -110,6 +122,7 @@ export class GeminiUpstream {
     const url = methodUrl(
       streaming ? "streamGenerateContent" : "generateContent",
       streaming,
+      this.baseUrl,
     );
     const envelope = buildCodeAssistBody(
       { ...openAiRequest, model },

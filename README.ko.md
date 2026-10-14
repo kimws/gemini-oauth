@@ -41,7 +41,7 @@ Gemini CLI는 일반적으로 Google OAuth 세션을 ~/.gemini/oauth_creds.json�
 - 요청 검증 및 기본 10 MiB JSON 요청 본문 크기 제한
 - auth store·upstream client·HTTP server를 내장할 수 있는 TypeScript 라이브러리 export
 
-현재 구현이 사용하는 upstream은 https://daily-cloudcode-pa.googleapis.com/v1internal의 Code Assist 비공개 API입니다. 공개 Gemini API가 아니며, 이 프로젝트가 안정성이나 지속적인 접근을 보장할 수 있는 endpoint도 아닙니다.
+기본 upstream은 https://daily-cloudcode-pa.googleapis.com/v1internal의 Code Assist 비공개 API입니다. 기업용 Code Assist 구독의 경우 프로덕션 엔드포인트(https://cloudcode-pa.googleapis.com/v1internal)를 사용하므로, `--url` CLI 옵션 또는 `CODE_ASSIST_URL` 환경 변수로 설정할 수 있습니다. 공개 Gemini API가 아니며, 이 프로젝트가 안정성이나 지속적인 접근을 보장할 수 있는 endpoint도 아닙니다.
 
 ## 사전 요구사항
 
@@ -160,6 +160,7 @@ gemini-oauth stop
 | --auth-file <path> | ~/.gemini/oauth_creds.json | Gemini CLI 호환 OAuth 인증 파일 경로입니다. |
 | --project <id> | 자동 | Code Assist / GCP project ID를 덮어씁니다. |
 | --models <ids> | 내장 allowlist | /v1/models에 반환할 모델 ID를 콤마로 구분합니다. |
+| --url <url> | https://daily-cloudcode-pa.googleapis.com/v1internal | Upstream Code Assist 엔드포인트 URL (예: 프로덕션 https://cloudcode-pa.googleapis.com/v1internal). |
 | --detach, -d | off | 백그라운드 daemon으로 시작합니다. |
 | --device | off | headless 로그인 방식을 사용합니다. |
 | --no-open | off | 로그인 시 브라우저를 자동으로 열지 않고 URL만 출력합니다. |

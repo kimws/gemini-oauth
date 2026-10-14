@@ -4,6 +4,7 @@ import {
   GeminiUpstream,
   createOpenAIStreamFromGemini,
 } from "../dist/upstream.js";
+import { normalizeBaseUrl } from "../dist/index.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -89,4 +90,76 @@ test("Responses streaming is rejected with a protocol-specific error", async () 
   assert.equal(result.kind, "error");
   assert.equal(result.status, 400);
   assert.equal(result.body.error.type, "unsupported_parameter");
+});
+
+test("upstream dispatches to configured custom url", async () => {
+  let requestedUrl = null;
+  const mockFetch = async (url) => {
+    requestedUrl = url;
+    return new Response(
+      JSON.stringify({
+        response: {
+          candidates: [
+            {
+              content: { role: "model", parts: [{ text: "custom url ok" }] },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+  const mockAuth = {
+    ensureProjectId: async () => "test-project",
+    getAccessToken: async () => "test-token",
+  };
+  const upstream = new GeminiUpstream({
+    auth: mockAuth,
+    fetch: mockFetch,
+    url: "https://cloudcode-pa.googleapis.com/v1internal",
+  });
+
+  assert.equal(
+    upstream.getBaseUrl(),
+    "https://cloudcode-pa.googleapis.com/v1internal",
+  );
+
+  const result = await upstream.chatCompletions({
+    model: "gemini-2.5-flash",
+    messages: [{ role: "user", content: "hi" }],
+  });
+  assert.equal(result.kind, "json");
+  assert.equal(result.status, 200);
+  assert.equal(
+    requestedUrl,
+    "https://cloudcode-pa.googleapis.com/v1internal:generateContent",
+  );
+});
+
+test("normalizeBaseUrl handles various URL formats", () => {
+  assert.equal(
+    normalizeBaseUrl("https://cloudcode-pa.googleapis.com/v1internal"),
+    "https://cloudcode-pa.googleapis.com/v1internal",
+  );
+  assert.equal(
+    normalizeBaseUrl("https://cloudcode-pa.googleapis.com/v1internal/"),
+    "https://cloudcode-pa.googleapis.com/v1internal",
+  );
+  assert.equal(
+    normalizeBaseUrl("https://cloudcode-pa.googleapis.com"),
+    "https://cloudcode-pa.googleapis.com/v1internal",
+  );
+  assert.equal(
+    normalizeBaseUrl("https://cloudcode-pa.googleapis.com/"),
+    "https://cloudcode-pa.googleapis.com/v1internal",
+  );
+  assert.equal(
+    normalizeBaseUrl("http://localhost:8080/custom/api"),
+    "http://localhost:8080/custom/api",
+  );
+  assert.equal(
+    normalizeBaseUrl(),
+    "https://daily-cloudcode-pa.googleapis.com/v1internal",
+  );
 });

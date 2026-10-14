@@ -21,12 +21,17 @@ export type ServerOptions = {
   maxBodyBytes?: number;
   /** Optional fetch implementation, primarily for embedding and tests. */
   fetch?: typeof fetch;
+  /** Custom Code Assist upstream URL / endpoint. */
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
 };
 
 export type RunningServer = {
   host: string;
   port: number;
   url: string;
+  upstreamUrl: string;
   models: string[];
   close: () => Promise<void>;
 };
@@ -327,6 +332,7 @@ export async function startGeminiOAuthServer(
     auth: options.auth,
     models: options.models,
     fetch: options.fetch,
+    url: options.url ?? options.endpoint ?? options.baseUrl,
   });
 
   // Ensure project is resolvable at startup so first request is faster.
@@ -348,11 +354,12 @@ export async function startGeminiOAuthServer(
 
       if (req.method === "GET" && (path === "/" || path === "/health")) {
         const session = options.auth.getSessionSnapshot();
+        const base = upstream.getBaseUrl();
         sendJson(res, 200, {
           ok: true,
           name: PACKAGE_NAME,
           version: PACKAGE_VERSION,
-          upstream: new URL(CODE_ASSIST_ENDPOINT).hostname,
+          upstream: new URL(base).hostname,
           project_id: session?.projectId ?? null,
           replay_state: "stateless",
         });
@@ -498,6 +505,7 @@ export async function startGeminiOAuthServer(
     host: boundHost,
     port: boundPort,
     url: `http://${urlHost}:${boundPort}/v1`,
+    upstreamUrl: upstream.getBaseUrl(),
     models,
     close: () =>
       new Promise((resolve, reject) => {

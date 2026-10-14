@@ -40,6 +40,9 @@ export type ProjectResolveResult =
 export type ResolveProjectOptions = {
   fetch?: typeof fetch;
   projectHint?: string;
+  baseUrl?: string;
+  url?: string;
+  endpoint?: string;
 };
 
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -70,12 +73,13 @@ export async function loadCodeAssist(
 ): Promise<LoadCodeAssistPayload | null> {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const projectHint = options.projectHint;
+  const baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
   const metadata = {
     ...coreClientMetadata("ANTIGRAVITY"),
     duetProject: projectHint,
   };
   try {
-    const response = await fetchImpl(methodUrl("loadCodeAssist"), {
+    const response = await fetchImpl(methodUrl("loadCodeAssist", false, baseUrl), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -113,12 +117,14 @@ export async function onboardUser(
 ): Promise<string | undefined> {
   const fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
   const projectHint = options.projectHint;
+  const baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
   try {
     const metadata = {
       ...coreClientMetadata("ANTIGRAVITY"),
       duetProject: projectHint,
     };
-    const response = await fetchImpl(methodUrl("onboardUser"), {
+    const targetUrl = methodUrl("onboardUser", false, baseUrl);
+    const response = await fetchImpl(targetUrl, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -140,7 +146,7 @@ export async function onboardUser(
 
     let payload = (await response.json()) as OnboardUserPayload;
 
-    const base = methodUrl("loadCodeAssist").replace(/:loadCodeAssist$/, "");
+    const base = targetUrl.replace(/:onboardUser$/, "");
 
     for (let attempt = 0; attempt < ONBOARD_POLL_ATTEMPTS; attempt += 1) {
       if (payload.done) break;

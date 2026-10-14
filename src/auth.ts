@@ -58,6 +58,9 @@ export type AuthStoreOptions = {
   fetch?: typeof fetch;
   /** Prefer the Antigravity macOS keyring session when available. */
   useAntigravityKeyring?: boolean;
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -72,6 +75,7 @@ export class GeminiAuthStore {
   readonly stateFilePath: string;
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly baseUrl?: string;
   private projectIdOverride?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly useAntigravityKeyring: boolean;
@@ -167,6 +171,7 @@ export class GeminiAuthStore {
     this.projectIdOverride = options.projectId;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.useAntigravityKeyring = options.useAntigravityKeyring ?? true;
+    this.baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
   }
 
   readCreds(): GeminiOAuthCreds | null {
@@ -470,6 +475,7 @@ export class GeminiAuthStore {
         process.env.GOOGLE_CLOUD_PROJECT ||
         process.env.GOOGLE_CLOUD_PROJECT_ID ||
         undefined,
+      baseUrl: this.baseUrl,
     });
     if (!result.ok) {
       throw new Error(result.error);

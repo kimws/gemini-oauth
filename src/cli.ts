@@ -5,11 +5,13 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { GeminiAuthStore } from "./auth.js";
 import {
+  CODE_ASSIST_BASE,
   DEFAULT_AUTH_FILE,
   DEFAULT_HOST,
   DEFAULT_PORT,
   PACKAGE_NAME,
   PACKAGE_VERSION,
+  normalizeBaseUrl,
 } from "./constants.js";
 import {
   DAEMON_LOG_FILE,
@@ -29,7 +31,7 @@ OpenAI-compatible API — the Gemini analogue of openai-oauth / grok-oauth.
 Usage:
   gemini-oauth [serve|start] [options]   Start local OpenAI-compatible proxy
   gemini-oauth stop                      Stop detached background server
-  gemini-oauth status                    Auth + server process status
+  gemini-oauth status [options]          Auth + server process status
   gemini-oauth logs [--follow]           Show detached server log
   gemini-oauth login [options]           Sign in via browser (or device/headless)
   gemini-oauth logout                    Clear stored credentials
@@ -41,6 +43,7 @@ Serve options:
   --auth-file <path>     Path to oauth_creds.json (default: ${DEFAULT_AUTH_FILE})
   --models <ids>         Comma-separated model allowlist
   --project <id>         Override GCP / Code Assist project id
+  --url <url>            Upstream Code Assist endpoint URL (default: ${CODE_ASSIST_BASE})
   --detach, -d           Run in background (daemon)
   --foreground           Force foreground (used by daemon child)
   --force                Ignore daemon guard for a foreground second instance
@@ -86,10 +89,15 @@ const fail = (msg: string, code = 1): never => {
 
 const cliEntry = fileURLToPath(import.meta.url);
 
-async function cmdAuthStatus(authFile: string, project?: string): Promise<void> {
+async function cmdAuthStatus(
+  authFile: string,
+  project?: string,
+  url?: string,
+): Promise<void> {
   const store = new GeminiAuthStore({
     authFilePath: authFile,
     projectId: project,
+    url,
   });
   if (!store.hasCredentials()) {
     print(`Auth: not signed in (${authFile})`);
@@ -103,6 +111,7 @@ async function cmdAuthStatus(authFile: string, project?: string): Promise<void> 
         print(`  expires_at: ${session.expiresAt.toISOString()}`);
       print(`  auth_file:  ${authFile}`);
       print(`  token:      available`);
+      print(`  upstream:   ${url ?? CODE_ASSIST_BASE}`);
       try {
         const projectId = await store.ensureProjectId();
         print(`  project:    ${projectId}`);
@@ -121,6 +130,7 @@ async function cmdAuthStatus(authFile: string, project?: string): Promise<void> 
     print(`Server: running`);
     print(`  pid:        ${daemon.pid}`);
     print(`  url:        ${daemon.url}`);
+    if (daemon.upstreamUrl) print(`  upstream:   ${daemon.upstreamUrl}`);
     print(`  started_at: ${daemon.startedAt}`);
     print(`  log_file:   ${daemon.logFile}`);
   } else {
@@ -135,10 +145,12 @@ async function cmdLogin(opts: {
   device: boolean;
   timeoutMs?: number;
   project?: string;
+  url?: string;
 }): Promise<void> {
   const store = new GeminiAuthStore({
     authFilePath: opts.authFile,
     projectId: opts.project,
+    url: opts.url,
   });
   await login({
     store,
@@ -155,11 +167,13 @@ function printExistingServer(existing: {
   port: number;
   logFile: string;
   startedAt: string;
+  upstreamUrl?: string;
 }): void {
   print(`Server already running (detached daemon)`);
   print(`  pid:        ${existing.pid}`);
   print(`  url:        ${existing.url}`);
   print(`  port:       ${existing.port}`);
+  if (existing.upstreamUrl) print(`  upstream:   ${existing.upstreamUrl}`);
   print(`  started_at: ${existing.startedAt}`);
   print(`  log_file:   ${existing.logFile}`);
   print(``);
@@ -202,6 +216,7 @@ async function cmdServe(opts: {
   authFile: string;
   models?: string[];
   project?: string;
+  url?: string;
   detach: boolean;
   foreground: boolean;
   force: boolean;
@@ -253,6 +268,7 @@ async function cmdServe(opts: {
     const store = new GeminiAuthStore({
       authFilePath: opts.authFile,
       projectId: opts.project,
+      url: opts.url,
     });
     if (!store.hasCredentials()) {
       print(`No credentials found. Run login first:\n  gemini-oauth login\n`);
@@ -266,6 +282,7 @@ async function cmdServe(opts: {
       host: opts.host,
       port: opts.port,
       authFile: opts.authFile,
+      upstreamUrl: opts.url,
     });
 
     const ready = await waitForDaemonReady(state);
@@ -283,6 +300,7 @@ async function cmdServe(opts: {
     print(`  pid: ${state.pid}`);
     print(`  url: ${state.url}`);
     print(`  port: ${state.port}`);
+    if (state.upstreamUrl) print(`  upstream: ${state.upstreamUrl}`);
     print(`  log: ${state.logFile}`);
     print(``);
     print(`  gemini-oauth status`);
@@ -307,6 +325,7 @@ async function cmdServe(opts: {
   const store = new GeminiAuthStore({
     authFilePath: opts.authFile,
     projectId: opts.project,
+    url: opts.url,
   });
   if (!store.hasCredentials()) {
     if (process.env.GEMINI_OAUTH_DAEMON === "1") {
@@ -325,6 +344,7 @@ async function cmdServe(opts: {
       port: opts.port,
       auth: store,
       models: opts.models,
+      url: opts.url,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -339,8 +359,9 @@ async function cmdServe(opts: {
 
   print("");
   print(`Gemini OAuth proxy ready at ${running.url}`);
-  print(`  host: ${running.host}`);
-  print(`  port: ${running.port}`);
+  print(`  host:     ${running.host}`);
+  print(`  port:     ${running.port}`);
+  print(`  upstream: ${running.upstreamUrl}`);
   if (!opts.portExplicit && running.port === DEFAULT_PORT) {
     print(
       `  (default port ${DEFAULT_PORT}; override with --port or GEMINI_OAUTH_PORT)`,
@@ -411,6 +432,8 @@ async function main(): Promise<void> {
       "auth-file": { type: "string" },
       models: { type: "string" },
       project: { type: "string" },
+      url: { type: "string" },
+      endpoint: { type: "string" },
       open: { type: "boolean", default: true },
       "no-open": { type: "boolean", default: false },
       device: { type: "boolean", default: false },
@@ -442,6 +465,24 @@ async function main(): Promise<void> {
   const open = values["no-open"] ? false : values.open !== false;
   const project = values.project;
 
+  const rawUrl =
+    values.url ??
+    values.endpoint ??
+    process.env.CODE_ASSIST_URL ??
+    process.env.CODE_ASSIST_ENDPOINT;
+  if (values.url !== undefined || values.endpoint !== undefined) {
+    const inputUrl = (values.url ?? values.endpoint)!;
+    try {
+      const parsed = new URL(inputUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        fail(`Invalid --url: ${inputUrl} (must be http:// or https://)`);
+      }
+    } catch {
+      fail(`Invalid --url: ${inputUrl}`);
+    }
+  }
+  const url = rawUrl ? normalizeBaseUrl(rawUrl) : undefined;
+
   if (command === "help") {
     print(help);
     return;
@@ -463,6 +504,7 @@ async function main(): Promise<void> {
       device: Boolean(values.device),
       timeoutMs,
       project,
+      url,
     });
     return;
   }
@@ -478,7 +520,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "status") {
-    await cmdAuthStatus(authFile, project);
+    await cmdAuthStatus(authFile, project, url);
     return;
   }
 
@@ -514,6 +556,8 @@ async function main(): Promise<void> {
     if (values.models) rawServeArgs.push("--models", values.models);
     if (values.project) rawServeArgs.push("--project", values.project);
     if (values["allow-remote"]) rawServeArgs.push("--allow-remote");
+    if (values.url) rawServeArgs.push("--url", values.url);
+    else if (values.endpoint) rawServeArgs.push("--url", values.endpoint);
 
     await cmdServe({
       host,
@@ -526,6 +570,7 @@ async function main(): Promise<void> {
             .filter(Boolean)
         : undefined,
       project,
+      url,
       detach: Boolean(values.detach),
       foreground: Boolean(values.foreground),
       force: Boolean(values.force),

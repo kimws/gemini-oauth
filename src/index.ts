@@ -10,7 +10,11 @@ export {
   type ServerOptions,
   type RunningServer,
 } from "./server.js";
-export { GeminiUpstream, type UpstreamOptions } from "./upstream.js";
+export {
+  GeminiUpstream,
+  createOpenAIStreamFromGemini,
+  type UpstreamOptions,
+} from "./upstream.js";
 export {
   login,
   loginBrowser,
@@ -37,6 +41,9 @@ export {
   DEFAULT_STATE_FILE,
   CODE_ASSIST_ENDPOINT,
   CODE_ASSIST_BASE,
+  CODE_ASSIST_PROD_ENDPOINT,
+  CODE_ASSIST_PROD_BASE,
+  normalizeBaseUrl,
   OAUTH_CLIENT_ID,
   DEFAULT_MODELS,
 } from "./constants.js";
