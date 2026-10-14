@@ -17,6 +17,11 @@ import {
   userAgent,
 } from "./constants.js";
 import { resolveProject } from "./project.js";
+import {
+  createLogger,
+  type Logger,
+  type LogLevel,
+} from "./logger.js";
 
 /** Shape of `~/.gemini/oauth_creds.json` (official Gemini CLI). */
 export type GeminiOAuthCreds = {
@@ -58,6 +63,11 @@ export type AuthStoreOptions = {
   fetch?: typeof fetch;
   /** Prefer the Antigravity macOS keyring session when available. */
   useAntigravityKeyring?: boolean;
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
+  logLevel?: LogLevel;
+  logger?: Logger;
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -72,6 +82,8 @@ export class GeminiAuthStore {
   readonly stateFilePath: string;
   readonly clientId: string;
   readonly clientSecret: string;
+  readonly baseUrl?: string;
+  readonly logger: Logger;
   private projectIdOverride?: string;
   private readonly fetchImpl: typeof fetch;
   private readonly useAntigravityKeyring: boolean;
@@ -167,6 +179,10 @@ export class GeminiAuthStore {
     this.projectIdOverride = options.projectId;
     this.fetchImpl = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.useAntigravityKeyring = options.useAntigravityKeyring ?? true;
+    this.baseUrl = options.baseUrl ?? options.url ?? options.endpoint;
+    this.logger =
+      options.logger ??
+      createLogger({ level: options.logLevel, prefix: "auth" });
   }
 
   readCreds(): GeminiOAuthCreds | null {
@@ -470,6 +486,8 @@ export class GeminiAuthStore {
         process.env.GOOGLE_CLOUD_PROJECT ||
         process.env.GOOGLE_CLOUD_PROJECT_ID ||
         undefined,
+      baseUrl: this.baseUrl,
+      logger: this.logger,
     });
     if (!result.ok) {
       throw new Error(result.error);

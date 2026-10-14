@@ -11,6 +11,11 @@ import {
 import type { GeminiAuthStore } from "./auth.js";
 import type { OpenAIChatRequest } from "./convert.js";
 import { GeminiUpstream } from "./upstream.js";
+import {
+  createLogger,
+  type Logger,
+  type LogLevel,
+} from "./logger.js";
 
 export type ServerOptions = {
   host?: string;
@@ -21,12 +26,21 @@ export type ServerOptions = {
   maxBodyBytes?: number;
   /** Optional fetch implementation, primarily for embedding and tests. */
   fetch?: typeof fetch;
+  /** Custom Code Assist upstream URL / endpoint. */
+  url?: string;
+  endpoint?: string;
+  baseUrl?: string;
+  /** Logging level: debug, info, warn, error, silent. */
+  logLevel?: LogLevel;
+  /** Custom logger instance. */
+  logger?: Logger;
 };
 
 export type RunningServer = {
   host: string;
   port: number;
   url: string;
+  upstreamUrl: string;
   models: string[];
   close: () => Promise<void>;
 };
@@ -323,36 +337,46 @@ export async function startGeminiOAuthServer(
   if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes <= 0) {
     throw new Error("maxBodyBytes must be a positive safe integer");
   }
+  const logger =
+    options.logger ??
+    createLogger({ level: options.logLevel, prefix: PACKAGE_NAME });
   const upstream = new GeminiUpstream({
     auth: options.auth,
     models: options.models,
     fetch: options.fetch,
+    url: options.url ?? options.endpoint ?? options.baseUrl,
+    logLevel: options.logLevel,
+    logger: logger.child("upstream"),
   });
 
   // Ensure project is resolvable at startup so first request is faster.
   try {
     await options.auth.ensureProjectId();
   } catch (err) {
-    console.warn(
-      `[${PACKAGE_NAME}] project resolution deferred:`,
-      err instanceof Error ? err.message : err,
+    logger.warn(
+      `project resolution deferred: ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 
   let models = options.models ?? (await upstream.listModels());
 
   const server = createServer(async (req, res) => {
+    const startTime = Date.now();
+    const method = req.method ?? "GET";
+    let path = "/";
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
-      const path = url.pathname;
+      path = url.pathname;
 
       if (req.method === "GET" && (path === "/" || path === "/health")) {
         const session = options.auth.getSessionSnapshot();
+        const base = upstream.getBaseUrl();
+        logger.debug(`${method} ${path} 200 (${Date.now() - startTime}ms)`);
         sendJson(res, 200, {
           ok: true,
           name: PACKAGE_NAME,
           version: PACKAGE_VERSION,
-          upstream: new URL(CODE_ASSIST_ENDPOINT).hostname,
+          upstream: new URL(base).hostname,
           project_id: session?.projectId ?? null,
           replay_state: "stateless",
         });
@@ -361,6 +385,7 @@ export async function startGeminiOAuthServer(
 
       if (req.method === "GET" && path === "/v1/models") {
         models = await upstream.listModels();
+        logger.info(`${method} ${path} 200 (${Date.now() - startTime}ms)`);
         sendJson(res, 200, {
           object: "list",
           data: models.map((id) => ({
@@ -379,6 +404,9 @@ export async function startGeminiOAuthServer(
         try {
           parsed = JSON.parse(bodyBuf.toString("utf8")) as unknown;
         } catch {
+          logger.warn(
+            `${method} ${path} 400 Invalid JSON (${Date.now() - startTime}ms)`,
+          );
           sendJson(res, 400, {
             error: {
               message: "Invalid JSON body",
@@ -389,6 +417,9 @@ export async function startGeminiOAuthServer(
         }
         const validationError = validateChatRequest(parsed);
         if (validationError) {
+          logger.warn(
+            `${method} ${path} 400: ${validationError} (${Date.now() - startTime}ms)`,
+          );
           sendJson(res, 400, {
             error: {
               message: validationError,
@@ -398,12 +429,23 @@ export async function startGeminiOAuthServer(
           return;
         }
 
-        const result = await upstream.chatCompletions(
-          parsed as OpenAIChatRequest,
-        );
+        const chatReq = parsed as OpenAIChatRequest;
+        const result = await upstream.chatCompletions(chatReq);
         if (result.kind === "stream") {
+          logger.info(
+            `${method} ${path} 200 [${chatReq.model}, stream] (${Date.now() - startTime}ms)`,
+          );
           await pipeStream(result.stream, res);
           return;
+        }
+        if (result.status >= 400) {
+          logger.error(
+            `${method} ${path} ${result.status} [${chatReq.model}] (${Date.now() - startTime}ms)`,
+          );
+        } else {
+          logger.info(
+            `${method} ${path} ${result.status} [${chatReq.model}] (${Date.now() - startTime}ms)`,
+          );
         }
         sendJson(res, result.status, result.body);
         return;
@@ -415,6 +457,9 @@ export async function startGeminiOAuthServer(
         try {
           parsed = JSON.parse(bodyBuf.toString("utf8")) as unknown;
         } catch {
+          logger.warn(
+            `${method} ${path} 400 Invalid JSON (${Date.now() - startTime}ms)`,
+          );
           sendJson(res, 400, {
             error: {
               message: "Invalid JSON body",
@@ -425,6 +470,9 @@ export async function startGeminiOAuthServer(
         }
         const validationError = validateResponsesRequest(parsed);
         if (validationError) {
+          logger.warn(
+            `${method} ${path} 400: ${validationError} (${Date.now() - startTime}ms)`,
+          );
           sendJson(res, 400, {
             error: {
               message: validationError,
@@ -436,17 +484,33 @@ export async function startGeminiOAuthServer(
           });
           return;
         }
-        const result = await upstream.responses(
-          parsed as Record<string, unknown>,
-        );
+        const reqObj = parsed as Record<string, unknown>;
+        const model =
+          typeof reqObj.model === "string" ? reqObj.model : "default";
+        const result = await upstream.responses(reqObj);
         if (result.kind === "stream") {
+          logger.info(
+            `${method} ${path} 200 [${model}, stream] (${Date.now() - startTime}ms)`,
+          );
           await pipeStream(result.stream, res);
           return;
+        }
+        if (result.status >= 400) {
+          logger.error(
+            `${method} ${path} ${result.status} [${model}] (${Date.now() - startTime}ms)`,
+          );
+        } else {
+          logger.info(
+            `${method} ${path} ${result.status} [${model}] (${Date.now() - startTime}ms)`,
+          );
         }
         sendJson(res, result.status, result.body);
         return;
       }
 
+      logger.warn(
+        `${method} ${path} 404 Not Found (${Date.now() - startTime}ms)`,
+      );
       sendJson(res, 404, {
         error: {
           message: `Route not found: ${req.method} ${path}`,
@@ -455,14 +519,21 @@ export async function startGeminiOAuthServer(
       });
     } catch (err) {
       if (err instanceof RequestAbortedError) {
+        logger.debug(`${method} ${path} aborted by client`);
         if (!res.destroyed) res.destroy();
         return;
       }
       if (res.headersSent) {
+        logger.error(
+          `${method} ${path} error after headers sent: ${err instanceof Error ? err.message : String(err)}`,
+        );
         res.destroy(err instanceof Error ? err : undefined);
         return;
       }
       if (err instanceof RequestBodyTooLargeError) {
+        logger.warn(
+          `${method} ${path} 413 Payload Too Large (${Date.now() - startTime}ms)`,
+        );
         sendJson(res, 413, {
           error: {
             message: err.message,
@@ -471,6 +542,9 @@ export async function startGeminiOAuthServer(
         });
         return;
       }
+      logger.error(
+        `${method} ${path} 500: ${err instanceof Error ? err.stack ?? err.message : String(err)} (${Date.now() - startTime}ms)`,
+      );
       sendJson(res, 500, {
         error: {
           message:
@@ -494,13 +568,19 @@ export async function startGeminiOAuthServer(
   const boundPort = addr.port;
   const urlHost = boundHost.includes(":") ? `[${boundHost}]` : boundHost;
 
+  logger.info(
+    `Proxy listening at http://${urlHost}:${boundPort}/v1 (upstream: ${upstream.getBaseUrl()})`,
+  );
+
   return {
     host: boundHost,
     port: boundPort,
     url: `http://${urlHost}:${boundPort}/v1`,
+    upstreamUrl: upstream.getBaseUrl(),
     models,
     close: () =>
       new Promise((resolve, reject) => {
+        logger.info("Stopping proxy server");
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   };
