@@ -19,7 +19,7 @@ Gemini OAuth proxy started in background
 
 Gemini CLI는 일반적으로 Google OAuth 세션을 ~/.gemini/oauth_creds.json에 저장합니다. 이 프로젝트는 다음 작업을 수행합니다.
 
-1. 해당 세션 또는 지원되는 macOS Antigravity 키체인 세션을 읽습니다.
+1. 해당 세션 또는 macOS Keychain / Linux Secret Service의 Antigravity 세션을 읽습니다.
 2. 만료가 임박한 OAuth access token을 자동으로 갱신합니다.
 3. Cloud Code Assist project ID를 자동으로 해석하거나 지정된 값을 사용합니다.
 4. OpenAI 형식의 메시지·도구·이미지·생성 옵션을 Code Assist 요청 형식으로 변환합니다.
@@ -121,7 +121,7 @@ gemini-oauth login --no-open
 
 로그인 과정은 PKCE 기반 OAuth를 사용하고, 결과를 Gemini CLI 호환 파일에 저장한 뒤 Code Assist project를 해석하려고 시도합니다. 프로젝트 자동 해석이 되지 않으면 아래처럼 project를 명시하세요.
 
-macOS에서는 기본적으로 OS keychain에 저장된 Antigravity 세션도 확인합니다. gemini-oauth logout은 이 세션을 삭제하지 않으므로 해당 Antigravity 도구로 별도 관리해야 합니다. 이 프로젝트에서 가장 이식성이 높은 기본 경로는 파일 기반 Gemini CLI 인증입니다.
+macOS와 Linux에서는 Antigravity(`agy`) OS 키링 세션을 우선 사용합니다. 두 플랫폼 모두 서비스 `gemini`, 계정 `antigravity`입니다. macOS는 `prefix:base64` Keychain 비밀번호를, Linux는 Secret Service의 JSON 원문을 저장합니다. 이 프록시는 그 access token만 읽고, Antigravity refresh token을 Gemini CLI OAuth 클라이언트로 갱신하지 않습니다. 그 갱신은 `unauthorized_client`를 반환합니다. 만료가 가까우면 `agy models`를 실행한 뒤 키링을 다시 읽습니다. `gemini-oauth logout`은 이 세션을 지우지 않습니다. 자세한 운영 메모는 [AGENTS.md](AGENTS.md)를 보세요.
 
 ## 프록시 실행
 
@@ -316,6 +316,7 @@ auth store·server·upstream client·OAuth login helper·daemon helper·project 
 
 | 경로 | 목적 |
 | --- | --- |
+| macOS Keychain / Linux Secret Service `gemini` / `antigravity` | Antigravity CLI 세션. access token이 유효하면 Gemini CLI 파일보다 우선합니다. |
 | ~/.gemini/oauth_creds.json | Gemini CLI 호환 access/refresh token. 지원되는 환경에서 0600 권한으로 작성합니다. |
 | ~/.gemini/gemini-oauth.json | 로컬 project ID·계정 email·tier cache |
 | ~/.gemini/oauth-proxy/state.json | 분리 daemon 상태 |
@@ -324,7 +325,7 @@ auth store·server·upstream client·OAuth login helper·daemon helper·project 
 
 OAuth 인증 정보는 비밀번호처럼 취급하세요. commit·paste·upload·log·공유·재판매하지 마세요. 인증 정보가 노출되었다면 해당 Google 계정의 관련 도구에서 revoke한 뒤 다시 로그인하세요.
 
-gemini-oauth logout은 지정된 파일 기반 인증 정보와 로컬 state를 지웁니다. Antigravity OS keychain 세션은 지우지 않습니다.
+gemini-oauth logout은 지정된 파일 기반 인증 정보와 로컬 state를 지웁니다. Antigravity OS 키링 세션은 지우지 않습니다.
 
 ## 개발 및 검증
 

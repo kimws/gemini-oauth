@@ -16,6 +16,11 @@ import {
   REFRESH_SKEW_MS,
   userAgent,
 } from "./constants.js";
+import {
+  antigravityProxyCreds,
+  parseAntigravityKeyringSecret,
+  readAntigravityKeyringSecret,
+} from "./antigravity-keyring.js";
 import { resolveProject } from "./project.js";
 
 /** Shape of `~/.gemini/oauth_creds.json` (official Gemini CLI). */
@@ -56,7 +61,7 @@ export type AuthStoreOptions = {
   clientSecret?: string;
   projectId?: string;
   fetch?: typeof fetch;
-  /** Prefer the Antigravity macOS keyring session when available. */
+  /** Prefer the Antigravity macOS or Linux keyring session when available. */
   useAntigravityKeyring?: boolean;
 };
 
@@ -79,83 +84,52 @@ export class GeminiAuthStore {
   private projectPromise: Promise<string> | null = null;
 
   /**
-   * Antigravity CLI keeps its OAuth session in the OS keyring. New models can
-   * be entitled there before they become available to the legacy Gemini CLI
-   * OAuth client, so prefer that session when it is present and still valid.
+   * Antigravity CLI keeps its OAuth session in the OS keyring on macOS and
+   * Linux. Prefer that session while it is valid. Do not attach its refresh
+   * token: the Gemini CLI OAuth client rejects it with unauthorized_client.
+   * A near-expiry session is refreshed by `agy models`, which rewrites the
+   * keyring item, and then read again.
    */
   private readAntigravityKeyringSession(
     allowRefresh = true,
   ): GeminiSession | null {
-    if (!this.useAntigravityKeyring || process.platform !== "darwin") {
-      return null;
-    }
+    if (!this.useAntigravityKeyring) return null;
+    if (process.platform !== "darwin" && process.platform !== "linux") return null;
 
     try {
-      const stored = execFileSync(
-        "/usr/bin/security",
-        [
-          "find-generic-password",
-          "-s",
-          "gemini",
-          "-a",
-          "antigravity",
-          "-w",
-        ],
-        {
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "ignore"],
-          timeout: 3000,
-        },
-      ).trim();
-      const separator = stored.indexOf(":");
-      if (separator < 0) return null;
-
-      const decoded = Buffer.from(stored.slice(separator + 1), "base64").toString(
-        "utf8",
-      );
-      const payload = JSON.parse(decoded) as {
-        token?: {
-          access_token?: string;
-          refresh_token?: string;
-          token_type?: string;
-          expiry?: string;
-        };
-      };
-      const token = payload.token;
-      if (!token?.access_token) return null;
-
-      const expiresAt = token.expiry ? new Date(token.expiry) : undefined;
-      const expired =
-        expiresAt && expiresAt.getTime() - REFRESH_SKEW_MS <= Date.now();
-      if (expired && allowRefresh) {
-        try {
-          execFileSync(process.env.AGY_CLI_PATH ?? "agy", ["models"], {
-            stdio: "ignore",
-            timeout: 30_000,
-          });
-        } catch {
-          return null;
-        }
-        return this.readAntigravityKeyringSession(false);
-      }
-      if (expired) return null;
-
-      return {
-        accessToken: token.access_token,
-        refreshToken: token.refresh_token,
-        expiresAt,
-        projectId:
-          process.env.GEMINI_OAUTH_ANTIGRAVITY_PROJECT ?? "default-cli-project",
-        raw: {
-          access_token: token.access_token,
-          refresh_token: token.refresh_token,
-          token_type: token.token_type ?? "Bearer",
-          expiry_date: expiresAt?.getTime(),
-          source: "antigravity-keyring",
-        },
-      };
+      const session = this.sessionFromKeyringSecret(readAntigravityKeyringSecret());
+      if (!session) return null;
+      if (!this.isExpired(session)) return session;
+      if (!allowRefresh) return null;
+      this.refreshAntigravityKeyringCommand();
+      const retried = this.sessionFromKeyringSecret(readAntigravityKeyringSecret());
+      if (!retried || this.isExpired(retried)) return null;
+      return retried;
     } catch {
       return null;
+    }
+  }
+
+  private sessionFromKeyringSecret(stored: string | null): GeminiSession | null {
+    const token = parseAntigravityKeyringSecret(stored);
+    if (!token) return null;
+    return {
+      accessToken: token.accessToken,
+      expiresAt: token.expiresAt,
+      projectId:
+        process.env.GEMINI_OAUTH_ANTIGRAVITY_PROJECT ?? "default-cli-project",
+      raw: antigravityProxyCreds(token),
+    };
+  }
+
+  private refreshAntigravityKeyringCommand(): void {
+    try {
+      execFileSync(process.env.AGY_CLI_PATH ?? "agy", ["models"], {
+        stdio: "ignore",
+        timeout: 30_000,
+      });
+    } catch {
+      // agy can be missing on a host that only has a copied access token.
     }
   }
 
@@ -220,6 +194,11 @@ export class GeminiAuthStore {
     }
   }
 
+  private hasAntigravityKeyringItem(): boolean {
+    if (!this.useAntigravityKeyring) return false;
+    return Boolean(parseAntigravityKeyringSecret(readAntigravityKeyringSecret()));
+  }
+
   hasCredentials(): boolean {
     try {
       if (this.readAntigravityKeyringSession()) return true;
@@ -270,10 +249,20 @@ export class GeminiAuthStore {
   }
 
   async getSession(options?: { forceRefresh?: boolean }): Promise<GeminiSession> {
+    if (options?.forceRefresh && this.hasAntigravityKeyringItem()) {
+      this.refreshAntigravityKeyringCommand();
+    }
     const snap = this.getSessionSnapshot();
     if (!snap) {
       throw new Error(
         `No Gemini credentials found at ${this.authFilePath}. Run \`gemini\` (login) or \`gemini-oauth login\`.`,
+      );
+    }
+
+    if (snap.raw.source === "antigravity-keyring") {
+      if (snap.accessToken && !this.isExpired(snap)) return snap;
+      throw new Error(
+        "Antigravity keyring session is unavailable or expired. Run `agy` as this user and sign in again.",
       );
     }
 

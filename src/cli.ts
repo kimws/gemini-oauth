@@ -102,6 +102,9 @@ async function cmdAuthStatus(authFile: string, project?: string): Promise<void> 
       if (session.expiresAt)
         print(`  expires_at: ${session.expiresAt.toISOString()}`);
       print(`  auth_file:  ${authFile}`);
+      if (session.raw.source === "antigravity-keyring") {
+        print(`  auth_source: antigravity-keyring`);
+      }
       print(`  token:      available`);
       try {
         const projectId = await store.ensureProjectId();
@@ -472,7 +475,7 @@ async function main(): Promise<void> {
     store.clear();
     print(`Cleared Gemini CLI credentials at ${authFile}`);
     print(
-      "Note: the Antigravity OS-keyring session is managed separately and was not removed.",
+      "Note: the Antigravity OS keyring session is managed separately and was not removed.",
     );
     return;
   }

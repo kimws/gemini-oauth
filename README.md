@@ -19,7 +19,7 @@ Gemini OAuth proxy started in background
 
 Gemini CLI normally stores a Google OAuth session in ~/.gemini/oauth_creds.json. This project:
 
-1. reads that session, or a supported Antigravity macOS keychain session;
+1. reads that session, or a supported Antigravity macOS Keychain / Linux Secret Service session;
 2. refreshes an OAuth access token when it is close to expiry;
 3. resolves or uses a Cloud Code Assist project ID;
 4. converts OpenAI-style messages, tools, images, and generation settings into the Code Assist request format;
@@ -121,7 +121,7 @@ gemini-oauth login --no-open
 
 The login flow uses OAuth with PKCE, saves credentials to the Gemini CLI-compatible file, and attempts to resolve the Code Assist project. If automatic project resolution is unavailable, set a project explicitly as described below.
 
-On macOS, the library also checks for an Antigravity session in the OS keychain by default. gemini-oauth logout does not remove that session; manage it with the corresponding Antigravity tooling.
+On macOS and Linux, the library prefers an Antigravity (`agy`) session from the OS keyring. Both platforms use service `gemini` and account `antigravity`. macOS stores a `prefix:base64` Keychain password. Linux stores raw JSON in the Secret Service. The proxy reads that access token and does not refresh it with the Gemini CLI OAuth client, which returns `unauthorized_client` for an Antigravity refresh token. Near expiry it runs `agy models` and reads the keyring again. `gemini-oauth logout` does not remove that session; manage it with `agy`. See [AGENTS.md](AGENTS.md).
 
 ## Running the proxy
 
@@ -316,6 +316,7 @@ The package exports the auth store, server, upstream client, OAuth login helpers
 
 | Path | Purpose |
 | --- | --- |
+| macOS Keychain / Linux Secret Service `gemini` / `antigravity` | Antigravity CLI session. Preferred over the Gemini CLI file when the access token is still valid. |
 | ~/.gemini/oauth_creds.json | Gemini CLI-compatible access and refresh tokens; written with restrictive 0600 permissions where supported. |
 | ~/.gemini/gemini-oauth.json | Local project ID, account email, and tier cache. |
 | ~/.gemini/oauth-proxy/state.json | Detached daemon state. |
@@ -324,7 +325,7 @@ The package exports the auth store, server, upstream client, OAuth login helpers
 
 Treat OAuth credentials as passwords. Do not commit, paste, upload, log, share, or resell them. If a credential is exposed, revoke it through the relevant Google account tooling and sign in again.
 
-gemini-oauth logout clears the configured file-based credential and local state. It does not clear an Antigravity OS-keychain session.
+gemini-oauth logout clears the configured file-based credential and local state. It does not clear an Antigravity OS keyring session.
 
 ## Development and verification
 

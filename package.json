@@ -1,6 +1,6 @@
 {
   "name": "gemini-oauth",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Turn your Gemini CLI (Code Assist OAuth) session into an OpenAI-compatible local API — the Gemini analogue of openai-oauth / grok-oauth.",
   "type": "module",
   "bin": {
@@ -31,6 +31,7 @@
     "typecheck:consumer": "tsc --noEmit --strict --module NodeNext --moduleResolution NodeNext --target ES2022 --lib ES2022 type-tests/consumer.ts",
     "test": "npm run build && node --test",
     "check": "npm run typecheck && npm test && npm run typecheck:consumer",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "prepublishOnly": "npm run check",
     "pack:local": "npm pack",
